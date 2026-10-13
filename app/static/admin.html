@@ -1,0 +1,290 @@
+<!doctype html><html lang="en" data-auto><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attendance Admin</title><link rel="stylesheet" href="/static/app.css">
+<style>
+ .shell{display:grid;grid-template-columns:210px 1fr;min-height:100vh}
+ nav{background:var(--panel);border-right:1px solid var(--line);padding:20px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh}
+ nav .brand{font-weight:700;font-size:16px;padding:4px 12px 16px}
+ nav a{display:block;padding:9px 12px;border-radius:8px;color:var(--ink);text-decoration:none;font-weight:600}
+ nav a:hover{background:var(--bg)}
+ nav a.on{background:var(--primary);color:var(--primary-ink)}
+ nav .sp{flex:1}
+ nav .lnk{font-weight:500;color:var(--muted);font-size:14px}
+ main{padding:26px 32px 60px;min-width:0;max-width:1180px}
+ .top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+ .strip{display:flex;gap:34px;flex-wrap:wrap;margin-bottom:22px}
+ .strip div{font-size:13px;color:var(--muted)}
+ .strip b{display:block;font-size:34px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1.1}
+ .strip .l b{color:var(--late)} .strip .o b{color:var(--ok)}
+ .cols{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);gap:22px}
+ .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 8px}
+ .box>h2,.box>.hd{padding:12px 10px 4px}
+ .hd{display:flex;justify-content:space-between;align-items:center}
+ .feed .it{display:flex;gap:10px;padding:9px 10px;border-bottom:1px solid var(--line);font-size:14px}
+ .feed .it:last-child{border-bottom:0}
+ .feed .t{color:var(--muted);font-variant-numeric:tabular-nums;min-width:44px}
+ .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px}
+ .filters .field{margin:0;min-width:130px}
+ .thumb{width:36px;height:36px;border-radius:50%;object-fit:cover;background:var(--line);display:block}
+ .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+ .form{max-width:520px} .form.wide{max-width:none}
+ .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+ .modal{position:fixed;inset:0;background:#0009;display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+ .modal .card{background:var(--panel);border-radius:14px;padding:22px;width:min(560px,100%);max-height:94vh;overflow:auto}
+ .modal .card.big{width:min(760px,100%)}
+ .modal .ft{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+ .auth{max-width:380px;margin:14vh auto;padding:0 20px}
+ .err{color:var(--bad);font-weight:600;margin:8px 0;min-height:1.3em}
+ .cam{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;max-width:min(100%,calc(50vh * 1.3333));margin:0 auto}
+ .cam video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+ .steps{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+ .steps span{padding:4px 12px;border-radius:99px;border:1px solid var(--line);font-size:13px;font-weight:600;color:var(--muted)}
+ .steps span.now{border-color:var(--primary);color:var(--primary)}
+ .steps span.done{background:var(--ok-bg);border-color:transparent;color:var(--ok)}
+ .instr{font-size:19px;font-weight:650;margin:6px 0}
+ .rowbtn{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+ .sect{margin-bottom:34px}
+ @media (max-width:900px){.shell{grid-template-columns:1fr}nav{position:static;height:auto;flex-direction:row;flex-wrap:wrap}nav .sp{display:none}.cols{grid-template-columns:1fr}main{padding:18px}}
+</style></head><body>
+<div id="app"></div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const LABEL={on_time:'On time',late:'Late',absent:'Absent'};
+const chip=s=>s?`<span class="chip ${s}">${LABEL[s]||s}</span>`:'<span class="chip none">Not in yet</span>';
+const hm=t=>t?t.slice(11,16):'';
+const today=()=>{const d=new Date();return new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
+const addDays=(s,n)=>{const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
+
+async function api(path,opt={}){
+  const o={credentials:'same-origin',...opt};
+  if(o.json!==undefined){o.method=o.method||'POST';o.headers={'Content-Type':'application/json'};o.body=JSON.stringify(o.json);}
+  const r=await fetch(path,o);
+  if(r.status===401&&!path.startsWith('/api/login')){boot();throw new Error('Signed out');}
+  let data=null;try{data=await r.json()}catch(e){}
+  if(!r.ok)throw new Error((data&&data.detail)||('Error '+r.status));
+  return data;
+}
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2800);}
+function modal(html,big){const m=document.createElement('div');m.className='modal';m.innerHTML=`<div class="card ${big?'big':''}">${html}</div>`;
+  m.addEventListener('mousedown',e=>{if(e.target===m&&m.dataset.lock!=='1')m.remove()});document.body.appendChild(m);return m;}
+
+let STATE={settings:null,timers:[]};
+function clearTimers(){STATE.timers.forEach(clearInterval);STATE.timers=[];}
+
+/* ---------- auth ---------- */
+async function boot(){
+  clearTimers();
+  const s=await (await fetch('/api/status')).json();
+  document.title=s.company+' - Admin';
+  if(!s.authed)return authScreen(s);
+  shell(s);
+}
+function authScreen(s){
+  const first=!s.has_password;
+  $('#app').innerHTML=`<div class="auth"><h1>${first?'Set an admin password':'Admin sign in'}</h1>
+   <p class="muted">${first?'This is the first start. Choose a password for the admin panel (at least 6 characters). Keep it safe: it protects your staff list and records.':esc(s.company)}</p>
+   <div class="field"><label for="pw">Password</label><input id="pw" type="password" autocomplete="${first?'new-password':'current-password'}"></div>
+   ${first?'<div class="field"><label for="pw2">Repeat password</label><input id="pw2" type="password" autocomplete="new-password"></div>':''}
+   <div class="err" id="err"></div><button class="btn primary" id="go">${first?'Save and continue':'Sign in'}</button></div>`;
+  const go=async()=>{
+    const pw=$('#pw').value;
+    if(first&&pw!==$('#pw2').value){$('#err').textContent='The two passwords do not match.';return;}
+    try{await api(first?'/api/setup':'/api/login',{json:{password:pw}});boot();}catch(e){$('#err').textContent=e.message;}
+  };
+  $('#go').onclick=go;$('#pw').addEventListener('keydown',e=>{if(e.key==='Enter')go()});$('#pw').focus();
+}
+function shell(s){
+  $('#app').innerHTML=`<div class="shell"><nav><div class="brand">${esc(s.company)}</div>
+   <a href="#/dashboard" data-p="dashboard">Dashboard</a><a href="#/attendance" data-p="attendance">Attendance</a>
+   <a href="#/people" data-p="people">People</a><a href="#/settings" data-p="settings">Settings</a><div class="sp"></div>
+   <a class="lnk" href="/kiosk" target="_blank">Open kiosk</a><a class="lnk" href="#" id="out">Sign out</a></nav><main id="view"></main></div>`;
+  $('#out').onclick=async e=>{e.preventDefault();await api('/api/logout',{method:'POST'});boot();};
+  route();
+}
+addEventListener('hashchange',()=>{if($('#view'))route()});
+function route(){
+  clearTimers();
+  const p=(location.hash.replace('#/','')||'dashboard').split('?')[0];
+  document.querySelectorAll('nav a[data-p]').forEach(a=>a.classList.toggle('on',a.dataset.p===p));
+  ({dashboard,attendance,people,settings}[p]||dashboard)();
+}
+
+/* ---------- dashboard ---------- */
+async function dashboard(){
+  $('#view').innerHTML=`<div class="top"><div><h1>Today</h1><div class="muted" id="dd"></div></div></div>
+   <div class="strip" id="strip"></div>
+   <div class="cols"><div class="box"><div class="hd"><h2>Attendance</h2></div><div id="tbl"></div></div>
+   <div class="box"><div class="hd"><h2>Live activity</h2><span class="muted" style="font-size:12.5px">updates every 2 s</span></div><div class="feed" id="feed"></div></div></div>`;
+  let lastId=0,items=[];
+  const loadSummary=async()=>{
+    const s=await api('/api/admin/summary');
+    $('#dd').textContent=new Date(s.day+'T00:00:00').toLocaleDateString([], {weekday:'long',day:'numeric',month:'long',year:'numeric'});
+    $('#strip').innerHTML=`<div>Enrolled<b>${s.enrolled}</b></div><div class="o">In today<b>${s.present}</b></div><div>On time<b>${s.on_time}</b></div><div class="l">Late<b>${s.late}</b></div><div>Not in yet<b>${s.not_in}</b></div>`;
+    $('#tbl').innerHTML=s.rows.length?`<table><tr><th>Name</th><th>Department</th><th>In</th><th>Out</th><th>Status</th><th></th></tr>${s.rows.map(r=>`<tr><td>${esc(r.name)}<div class="muted" style="font-size:12.5px">${esc(r.emp_code)}</div></td><td>${esc(r.department)}</td><td class="num">${hm(r.check_in)}</td><td class="num">${hm(r.check_out)}</td><td>${chip(r.status)}</td><td class="acts"><button class="btn small" data-m="${r.id}">Edit</button></td></tr>`).join('')}</table>`:
+      `<div class="empty">No one is enrolled yet. Go to <a href="#/people">People</a> to add your first person.</div>`;
+    $('#tbl').querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>manualDialog({person_id:+b.dataset.m,day:s.day},loadSummary));
+  };
+  const kindText=e=>({check_in:`${esc(e.name)} checked in${e.detail==='late'?' (late)':''}`,check_out:`${esc(e.name)} checked out`,repeat:`${esc(e.name)} scanned again`,unknown:'Unknown face at the kiosk',enroll:`${esc(e.name)} enrolled a face sample`,manual:`${esc(e.name)} edited by admin (${esc(e.detail)})`}[e.kind]||esc(e.kind));
+  const loadFeed=async()=>{
+    const ev=await api('/api/admin/events?after='+lastId+'&limit=40');
+    if(ev.length){lastId=Math.max(lastId,...ev.map(e=>e.id));items=[...ev,...items].slice(0,40);
+      if(ev.some(e=>e.kind==='check_in'||e.kind==='check_out'||e.kind==='manual'))loadSummary();}
+    $('#feed').innerHTML=items.length?items.map(e=>`<div class="it"><span class="t">${hm(e.ts)}</span><span>${kindText(e)}</span></div>`).join(''):'<div class="empty">Waiting for the first scan.</div>';
+  };
+  await loadSummary();await loadFeed();
+  STATE.timers.push(setInterval(()=>loadFeed().catch(()=>{}),2000));
+}
+
+/* ---------- attendance ---------- */
+async function attendance(){
+  const deps=await api('/api/admin/departments'),ppl=await api('/api/admin/people');
+  $('#view').innerHTML=`<div class="top"><h1>Attendance records</h1><div class="acts"><button class="btn" id="xl">Export Excel</button><button class="btn" id="csv">Export CSV</button><button class="btn primary" id="add">Add or fix a record</button></div></div>
+   <div class="filters">
+    <div class="field"><label>Range</label><select id="rng"><option value="today">Today</option><option value="7">Last 7 days</option><option value="month">This month</option><option value="custom">Custom dates</option></select></div>
+    <div class="field"><label>From</label><input type="date" id="fs"></div><div class="field"><label>To</label><input type="date" id="fe"></div>
+    <div class="field"><label>Department</label><select id="fd"><option value="">All</option>${deps.map(d=>`<option>${esc(d)}</option>`).join('')}</select></div>
+    <div class="field"><label>Person</label><select id="fp"><option value="0">Everyone</option>${ppl.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Status</label><select id="fst"><option value="">Any</option><option value="on_time">On time</option><option value="late">Late</option><option value="absent">Absent</option></select></div></div>
+   <div class="box" id="res"></div>`;
+  const t=today();$('#fs').value=t;$('#fe').value=t;
+  const setRange=()=>{const v=$('#rng').value;
+    if(v==='today'){$('#fs').value=t;$('#fe').value=t}
+    else if(v==='7'){$('#fs').value=addDays(t,-6);$('#fe').value=t}
+    else if(v==='month'){$('#fs').value=t.slice(0,8)+'01';$('#fe').value=t}};
+  const q=()=>new URLSearchParams({start:$('#fs').value,end:$('#fe').value,department:$('#fd').value,person_id:$('#fp').value,status:$('#fst').value}).toString();
+  const load=async()=>{
+    const rows=await api('/api/admin/attendance?'+q());
+    $('#res').innerHTML=rows.length?`<table><tr><th>Date</th><th>Name</th><th>Department</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th></th></tr>${rows.map(r=>`<tr><td class="num">${r.day}</td><td>${esc(r.name)}</td><td>${esc(r.department)}</td><td class="num">${hm(r.check_in)}</td><td class="num">${hm(r.check_out)}</td><td class="num">${r.hours}</td><td>${chip(r.status)}${r.source==='manual'?' <span class="muted" style="font-size:12px">edited</span>':''}</td><td class="acts"><button class="btn small" data-e="${r.id}">Edit</button></td></tr>`).join('')}</table>`:'<div class="empty">No records for these filters.</div>';
+    $('#res').querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>{const r=rows.find(x=>x.id==b.dataset.e);manualDialog({person_id:r.person_id,day:r.day,status:r.status,check_in:hm(r.check_in),check_out:hm(r.check_out),note:r.note,rid:r.id},load)});
+  };
+  $('#rng').onchange=()=>{setRange();load()};
+  ['fs','fe'].forEach(i=>$('#'+i).onchange=()=>{$('#rng').value='custom';load()});
+  ['fd','fp','fst'].forEach(i=>$('#'+i).onchange=load);
+  $('#csv').onclick=()=>location.href='/api/admin/export?format=csv&'+q();
+  $('#xl').onclick=()=>location.href='/api/admin/export?format=xlsx&'+q();
+  $('#add').onclick=()=>manualDialog({day:$('#fe').value||t},load);
+  load();
+}
+async function manualDialog(init,done){
+  const ppl=(await api('/api/admin/people')).filter(p=>p.active);
+  const m=modal(`<h2>${init.rid?'Edit record':'Mark attendance by hand'}</h2><p class="muted">Use this when someone forgot to scan, the camera missed them, or to mark an absence.</p>
+   <div class="field"><label>Person</label><select id="mp">${ppl.map(p=>`<option value="${p.id}" ${p.id==init.person_id?'selected':''}>${esc(p.name)} (${esc(p.emp_code)})</option>`).join('')}</select></div>
+   <div class="grid2"><div class="field"><label>Date</label><input type="date" id="md" value="${init.day}"></div>
+   <div class="field"><label>Status</label><select id="ms"><option value="on_time">On time</option><option value="late">Late</option><option value="absent">Absent</option></select></div></div>
+   <div class="grid2"><div class="field"><label>Check in</label><input type="time" id="mi" value="${init.check_in||''}"></div><div class="field"><label>Check out</label><input type="time" id="mo" value="${init.check_out||''}"></div></div>
+   <div class="field"><label>Note</label><input id="mn" value="${esc(init.note||'')}" placeholder="Optional"></div><div class="err" id="merr"></div>
+   <div class="ft">${init.rid?'<button class="btn danger" id="mdel" style="margin-right:auto">Delete record</button>':''}<button class="btn" id="mc">Cancel</button><button class="btn primary" id="msv">Save</button></div>`);
+  if(init.status)m.querySelector('#ms').value=init.status;
+  m.querySelector('#mc').onclick=()=>m.remove();
+  if(init.rid)m.querySelector('#mdel').onclick=async()=>{if(confirm('Delete this record?')){await api('/api/admin/attendance/'+init.rid,{method:'DELETE'});m.remove();toast('Record deleted');done&&done()}};
+  m.querySelector('#msv').onclick=async()=>{
+    const st=m.querySelector('#ms').value,ci=m.querySelector('#mi').value;
+    if(st!=='absent'&&!ci){m.querySelector('#merr').textContent='Enter the check-in time.';return;}
+    try{await api('/api/admin/attendance',{method:'PUT',json:{person_id:+m.querySelector('#mp').value,day:m.querySelector('#md').value,status:st,check_in:ci||null,check_out:m.querySelector('#mo').value||null,note:m.querySelector('#mn').value}});
+      m.remove();toast('Saved');done&&done();}catch(e){m.querySelector('#merr').textContent=e.message;}
+  };
+}
+
+/* ---------- people ---------- */
+async function people(){
+  const rows=await api('/api/admin/people');
+  $('#view').innerHTML=`<div class="top"><div><h1>People</h1><div class="muted">${rows.length} on the list</div></div><button class="btn primary" id="np">Add person</button></div><div class="box" id="pl"></div>`;
+  $('#pl').innerHTML=rows.length?`<table><tr><th></th><th>Name</th><th>Employee ID</th><th>Department</th><th>Face samples</th><th>Status</th><th></th></tr>${rows.map(p=>`<tr><td>${p.has_thumb?`<img class="thumb" src="/api/admin/people/${p.id}/thumb">`:'<div class="thumb"></div>'}</td><td>${esc(p.name)}</td><td>${esc(p.emp_code)}</td><td>${esc(p.department)}</td><td class="num">${p.samples?p.samples:'<span class="chip late">Not enrolled</span>'}</td><td>${p.active?'Active':'<span class="muted">Inactive</span>'}</td><td class="acts"><button class="btn small primary" data-en="${p.id}">${p.samples?'Add faces':'Enrol face'}</button><button class="btn small" data-ed="${p.id}">Edit</button></td></tr>`).join('')}</table>`:'<div class="empty">Nobody here yet. Add a person, then enrol their face.</div>';
+  $('#np').onclick=()=>personDialog(null);
+  $('#pl').querySelectorAll('[data-en]').forEach(b=>b.onclick=()=>enrollDialog(rows.find(p=>p.id==b.dataset.en)));
+  $('#pl').querySelectorAll('[data-ed]').forEach(b=>b.onclick=()=>personDialog(rows.find(p=>p.id==b.dataset.ed)));
+}
+function personDialog(p){
+  const m=modal(`<h2>${p?'Edit person':'Add person'}</h2>
+   <div class="field"><label>Employee ID</label><input id="pc" value="${esc(p?.emp_code||'')}"></div>
+   <div class="field"><label>Name</label><input id="pn" value="${esc(p?.name||'')}"></div>
+   <div class="field"><label>Department</label><input id="pd" value="${esc(p?.department||'')}"></div>
+   ${p?`<div class="field"><label><input type="checkbox" id="pa" style="width:auto" ${p.active?'checked':''}> Active (appears on the kiosk and in reports)</label></div>`:''}
+   <div class="err" id="perr"></div>
+   <div class="ft">${p?'<button class="btn danger" id="pdel" style="margin-right:auto">Delete person</button><button class="btn" id="pclr">Clear faces</button>':''}<button class="btn" id="pcx">Cancel</button><button class="btn primary" id="psv">${p?'Save':'Save and enrol face'}</button></div>`);
+  m.querySelector('#pcx').onclick=()=>m.remove();
+  if(p){
+    m.querySelector('#pdel').onclick=async()=>{if(confirm(`Delete ${p.name} and all of their attendance records? This cannot be undone.`)){await api('/api/admin/people/'+p.id,{method:'DELETE'});m.remove();toast('Deleted');people();}};
+    m.querySelector('#pclr').onclick=async()=>{if(confirm('Remove all saved face samples for this person? You can enrol them again afterwards.')){await api(`/api/admin/people/${p.id}/clear-faces`,{method:'POST'});m.remove();toast('Face samples removed');people();}};
+  }
+  m.querySelector('#psv').onclick=async()=>{
+    const body={emp_code:m.querySelector('#pc').value,name:m.querySelector('#pn').value,department:m.querySelector('#pd').value,active:p?m.querySelector('#pa').checked:true};
+    try{
+      if(p){await api('/api/admin/people/'+p.id,{method:'PUT',json:body});m.remove();toast('Saved');people();}
+      else{const r=await api('/api/admin/people',{json:body});m.remove();await people();enrollDialog({id:r.id,name:body.name,samples:0});}
+    }catch(e){m.querySelector('#perr').textContent=e.message;}
+  };
+  m.querySelector('#pc').focus();
+}
+
+/* ---------- enrol ---------- */
+const STEPS=[['front','Look straight at the camera'],['left','Turn your head slightly to your left'],['right','Turn your head slightly to your right'],['up','Lift your chin slightly'],['down','Lower your chin slightly']];
+async function enrollDialog(p){
+  const m=modal(`<h2>Enrol face: ${esc(p.name)}</h2>
+   <div class="steps" id="st"></div><div class="instr" id="ins"></div>
+   <div class="cam" id="camwrap"><video id="ev" autoplay playsinline muted></video></div>
+   <div class="err" id="eerr"></div>
+   <div class="rowbtn"><button class="btn primary" id="cap">Take photo</button><label class="btn" style="margin:0">Upload a photo instead<input type="file" id="up" accept="image/*" hidden></label><button class="btn" id="skip">Skip this angle</button><span style="flex:1"></span><button class="btn" id="fin">Done</button></div>
+   <p class="hint">Five photos from slightly different angles make recognition much more reliable. Good light on the face helps most.</p>`,true);
+  m.dataset.lock='1';
+  let idx=0,done=new Set(),stream=null,samples=p.samples||0;
+  const st=m.querySelector('#st'),ins=m.querySelector('#ins'),err=m.querySelector('#eerr');
+  const draw=()=>{st.innerHTML=STEPS.map((s,i)=>`<span class="${done.has(i)?'done':i===idx?'now':''}">${s[0][0].toUpperCase()+s[0].slice(1)}</span>`).join('');
+    ins.textContent=idx<STEPS.length?STEPS[idx][1]:`All angles captured (${samples} samples saved). Press Done.`;
+    m.querySelector('#cap').disabled=idx>=STEPS.length;m.querySelector('#skip').disabled=idx>=STEPS.length;};
+  const close=()=>{if(stream)stream.getTracks().forEach(t=>t.stop());m.remove();people();};
+  m.querySelector('#fin').onclick=()=>{if(samples<3&&!confirm('Fewer than 3 samples saved. Recognition may be unreliable. Finish anyway?'))return;close();};
+  const vid=m.querySelector('#ev');
+  try{
+    if(!navigator.mediaDevices?.getUserMedia)throw new Error('The browser blocks the camera on this address. Use "Upload a photo instead", or open the admin panel from the server computer (localhost), or start the server with --https.');
+    stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720}},audio:false});vid.srcObject=stream;await vid.play();
+  }catch(e){err.textContent=e.message;m.querySelector('#camwrap').style.display='none';m.querySelector('#cap').disabled=true;}
+  const send=async(blob,step,force)=>{
+    err.textContent='Checking...';
+    const r=await api(`/api/admin/people/${p.id}/enroll?step=${step}&force=${force?1:0}`,{method:'POST',body:blob});
+    if(r.ok){err.textContent='';samples=r.samples;if(step!=='upload'){done.add(idx);idx++;}toast('Photo saved ('+samples+')');draw();return;}
+    if(r.duplicate){if(confirm(r.reason+'.\n\nIf this is a different person (for example a relative), you can save it anyway. Save anyway?'))return send(blob,step,true);err.textContent=r.reason;return;}
+    err.textContent=r.reason;
+  };
+  m.querySelector('#cap').onclick=async()=>{
+    if(!vid.videoWidth)return;const c=document.createElement('canvas');const w=Math.min(960,vid.videoWidth);c.width=w;c.height=Math.round(w*vid.videoHeight/vid.videoWidth);
+    c.getContext('2d').drawImage(vid,0,0,c.width,c.height);
+    const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',.9));
+    try{await send(blob,STEPS[idx][0],false)}catch(e){err.textContent=e.message}
+  };
+  m.querySelector('#skip').onclick=()=>{idx++;draw();};
+  m.querySelector('#up').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await send(f,'upload',false)}catch(x){err.textContent=x.message}e.target.value='';};
+  draw();
+}
+
+/* ---------- settings ---------- */
+async function settings(){
+  const s=await api('/api/admin/settings'),lan=await (await fetch('/api/lan')).json(),bk=await api('/api/admin/backups');
+  $('#view').innerHTML=`<div class="top"><h1>Settings</h1></div>
+  <div class="sect form"><h2 style="margin-bottom:12px">Attendance rules</h2>
+   <div class="field"><label>Company name</label><input id="s_company_name" value="${esc(s.company_name)}"></div>
+   <div class="grid2"><div class="field"><label>Office start time</label><input type="time" id="s_office_start" value="${esc(s.office_start)}"></div>
+   <div class="field"><label>Mark as late after (minutes)</label><input type="number" min="0" id="s_late_after_min" value="${esc(s.late_after_min)}"><div class="hint">Grace period after the start time.</div></div></div>
+   <div class="grid2"><div class="field"><label>Same-person cooldown (seconds)</label><input type="number" min="5" id="s_cooldown_sec" value="${esc(s.cooldown_sec)}"><div class="hint">Stops repeat scans while someone stands at the kiosk.</div></div>
+   <div class="field"><label>Check-out gap (minutes)</label><input type="number" min="1" id="s_checkout_gap_min" value="${esc(s.checkout_gap_min)}"><div class="hint">A scan this long after check-in counts as check-out.</div></div></div>
+   <h2 style="margin:22px 0 12px">Recognition</h2>
+   <div class="field"><label>Matching strictness: <span id="thv" class="num">${esc(s.threshold)}</span></label><input type="range" min="0.30" max="0.70" step="0.01" id="s_threshold" value="${esc(s.threshold)}"><div class="hint">Higher is stricter: fewer wrong matches, but more people may need a second try. Default 0.45.</div></div>
+   <div class="grid2"><div class="field"><label>Smallest face to accept (pixels)</label><input type="number" min="40" id="s_min_face_px" value="${esc(s.min_face_px)}"><div class="hint">Ignores people walking past far from the camera.</div></div>
+   <div class="field"><label>Frames to confirm a match</label><input type="number" min="1" max="5" id="s_confirm_frames" value="${esc(s.confirm_frames)}"></div></div>
+   <div class="err" id="serr"></div><button class="btn primary" id="ssv">Save settings</button></div>
+  <div class="sect form"><h2 style="margin-bottom:12px">Backup</h2><p class="muted">Your whole database (people, face data, records) is one file. Make a backup regularly and copy it to a USB drive.</p>
+   <button class="btn" id="mk">Create backup now</button>
+   <div style="margin-top:12px" id="bl">${bk.length?bk.map(b=>`<div style="padding:6px 0"><a href="/api/admin/backups/${encodeURIComponent(b.name)}">${esc(b.name)}</a> <span class="muted">${(b.size/1024).toFixed(0)} KB</span></div>`).join(''):'<div class="muted">No backups yet.</div>'}</div></div>
+  <div class="sect form"><h2 style="margin-bottom:12px">Admin password</h2><div class="field"><label>New password</label><input type="password" id="npw" autocomplete="new-password"></div><button class="btn" id="cpw">Change password</button></div>
+  <div class="sect form"><h2 style="margin-bottom:8px">Network</h2><p class="muted">Other computers on the same Wi-Fi can open the admin panel at<br><b>${lan.scheme}://${lan.ip}:${lan.port}/admin</b></p></div>`;
+  $('#s_threshold').oninput=e=>$('#thv').textContent=e.target.value;
+  $('#ssv').onclick=async()=>{
+    const num=['late_after_min','cooldown_sec','checkout_gap_min','min_face_px','confirm_frames'];
+    const body={company_name:$('#s_company_name').value,office_start:$('#s_office_start').value,threshold:+$('#s_threshold').value};
+    num.forEach(k=>body[k]=+$('#s_'+k).value);
+    try{await api('/api/admin/settings',{method:'PUT',json:body});$('#serr').textContent='';toast('Settings saved');}catch(e){$('#serr').textContent=e.message;}};
+  $('#mk').onclick=async()=>{await api('/api/admin/backup',{method:'POST'});toast('Backup created');settings();};
+  $('#cpw').onclick=async()=>{try{await api('/api/admin/password',{json:{password:$('#npw').value}});$('#npw').value='';toast('Password changed');}catch(e){toast(e.message)}};
+}
+boot();
+</script></body></html>

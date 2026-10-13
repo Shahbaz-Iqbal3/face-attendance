@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Face Attendance</title><link rel="stylesheet" href="/static/app.css">
+<style>
+ main{max-width:640px;margin:10vh auto;padding:0 20px}
+ .row{display:flex;gap:14px;margin:26px 0}
+ .row a{flex:1;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px}
+ .row a:hover{border-color:var(--primary)}
+ .row b{display:block;font-size:19px;margin-bottom:4px}
+ code{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+</style></head><body><main>
+<h1>Face Attendance</h1>
+<p class="muted">Runs on this computer. No internet needed, and no face data ever leaves your office network.</p>
+<div class="row">
+  <a href="/kiosk"><b>Kiosk screen</b><span class="muted">Open on the screen with the camera, at the entrance.</span></a>
+  <a href="/admin"><b>Admin panel</b><span class="muted">People, attendance records, settings.</span></a>
+</div>
+<p class="muted" id="lan"></p>
+<script>
+fetch('/api/lan').then(r=>r.json()).then(l=>{
+ document.getElementById('lan').innerHTML='From another computer on the same Wi-Fi, open <code>'+l.scheme+'://'+l.ip+':'+l.port+'/admin</code>';
+});
+</script></main></body></html>
