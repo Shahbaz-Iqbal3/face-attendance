@@ -20,7 +20,6 @@ env/
 # Build artifacts
 /build/
 /dist/
-*.spec
 /wheels/
 
 # Test and type-check caches
