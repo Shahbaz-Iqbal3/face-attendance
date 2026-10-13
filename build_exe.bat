@@ -1,15 +1,14 @@
 @echo off
-REM Builds a Windows folder you can hand to a customer: no Python, no setup, no internet.
-REM Run setup.bat first, then this. Result: dist\FaceAttendance\FaceAttendance.exe
+REM Builds the customer version: dist\FaceAttendance\FaceAttendance.exe (no Python, no setup, no internet).
+REM Run setup.bat first, then this.
+setlocal
 cd /d "%~dp0"
-call .venv\Scripts\activate.bat
-pip install pyinstaller
-pyinstaller --noconfirm --clean --name FaceAttendance ^
-  --add-data "models;models" --add-data "app\static;app\static" ^
-  --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto ^
-  --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto ^
-  --hidden-import uvicorn.lifespan.on --collect-submodules app --collect-all onnxruntime ^
-  run.py
+if not exist .venv\Scripts\python.exe ( echo  Run setup.bat first. & pause & exit /b 1 )
+.venv\Scripts\python.exe -m pip install pyinstaller
+if errorlevel 1 ( echo  Could not install PyInstaller. & pause & exit /b 1 )
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean FaceAttendance.spec
+if errorlevel 1 ( echo  Build FAILED. & pause & exit /b 1 )
 echo.
-echo Done. Copy the dist\FaceAttendance folder to the customer PC and double-click FaceAttendance.exe
+echo  Done. Give the customer the whole folder:  dist\FaceAttendance
+echo  They only double-click FaceAttendance.exe
 pause

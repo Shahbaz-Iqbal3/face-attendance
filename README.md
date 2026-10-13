@@ -3,7 +3,19 @@
 Face-recognition attendance for small offices. One computer runs the server and the kiosk camera;
 the owner or HR opens the admin panel from any PC on the same Wi-Fi. **No internet, no cloud.**
 
-## Start (Windows)
+## For non-technical users: the .exe
+Give them the `FaceAttendance` folder (built by `build_exe.bat`, or downloaded from GitHub Actions, see below).
+They double-click **FaceAttendance.exe**: no Python, no setup, no internet. Keep the black window open while in use.
+Data is saved in the `data` folder next to the exe. If Windows Firewall asks, click **Allow** (needed for other PCs to open the admin panel).
+
+**Build the exe without a Windows dev setup:** push this folder to a GitHub repository, open the **Actions** tab,
+run **Build Windows app**, and download `FaceAttendance-windows.zip` from the finished run.
+
+## If it does not start
+The black window shows the error and it is saved in `logs\error.log`. Most common causes: Python 3.14 (use 3.12),
+setup.bat not finished successfully, or port 8000 already in use (start with `run.bat --port 8001`).
+
+## Start (Windows, developer mode)
 1. Install Python 3.10+ (tick "Add to PATH").
 2. Double-click `setup.bat` (internet needed once, for Python packages).
 3. Double-click `run.bat`. The browser opens. Choose **Admin** and set a password on first start.

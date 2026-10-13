@@ -1,7 +1,9 @@
 """Start the server.  python run.py [--port 8000] [--https]"""
 import argparse
+import os
 import socket
 import sys
+import traceback
 
 import uvicorn
 
@@ -49,17 +51,26 @@ def make_cert():
 
 
 def main():
+    if sys.stdout is None:                      # windowed exe: no console attached
+        sys.stdout = sys.stderr = open(os.devnull, "w")
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--no-browser", action="store_true", help="do not open the browser automatically")
     ap.add_argument("--https", action="store_true", help="serve over HTTPS (lets other PCs use the camera)")
     a = ap.parse_args()
+    if not port_free(a.port):
+        print(f"\n  Port {a.port} is already in use. Face Attendance may already be running")
+        print(f"  (look for another black window), or another program uses that port.")
+        print(f"  Open http://localhost:{a.port} in your browser, or start with: --port 8001\n")
+        input("  Press Enter to close...")
+        sys.exit(1)
     scheme = "https" if a.https else "http"
     ssl = {}
     if a.https:
         ssl["ssl_certfile"], ssl["ssl_keyfile"] = make_cert()
     ip = lan_ip()
-    print("\n  Face Attendance is starting (100% offline)\n")
+    print("\n  Face Attendance is starting (100% offline)")
+    print("  Keep this window open while the system is in use. Close it to stop.\n")
     print(f"  This computer : {scheme}://localhost:{a.port}")
     print(f"  Kiosk screen  : {scheme}://localhost:{a.port}/kiosk")
     print(f"  Admin (LAN)   : {scheme}://{ip}:{a.port}/admin\n")
@@ -70,5 +81,30 @@ def main():
     uvicorn.run(app, host="0.0.0.0", port=a.port, log_level="warning", **ssl)
 
 
+def port_free(port):
+    s = socket.socket()
+    try:
+        s.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+    except BaseException:
+        log = DATA_DIR.parent / "logs"
+        log.mkdir(exist_ok=True)
+        (log / "error.log").write_text(
+            f"Python {sys.version}\n\n" + traceback.format_exc(), encoding="utf-8")
+        print("\n  The app could not start.\n")
+        print(traceback.format_exc())
+        print(f"  This was saved to: {log / 'error.log'}")
+        print("  Please send that file (or a photo of this window) to your support person.\n")
+        input("  Press Enter to close...")
+        sys.exit(1)
