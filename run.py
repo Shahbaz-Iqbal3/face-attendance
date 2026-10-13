@@ -71,14 +71,47 @@ def main():
     ip = lan_ip()
     print("\n  Face Attendance is starting (100% offline)")
     print("  Keep this window open while the system is in use. Close it to stop.\n")
-    print(f"  This computer : {scheme}://localhost:{a.port}")
-    print(f"  Kiosk screen  : {scheme}://localhost:{a.port}/kiosk")
+    print(f"  This computer : {scheme}://127.0.0.1:{a.port}")
+    print(f"  Kiosk screen  : {scheme}://127.0.0.1:{a.port}/kiosk")
     print(f"  Admin (LAN)   : {scheme}://{ip}:{a.port}/admin\n")
+    log("starting; loading models...")
     from app.main import app
-    if not a.no_browser:
-        import threading, webbrowser
-        threading.Timer(2.5, lambda: webbrowser.open(f"{scheme}://localhost:{a.port}/")).start()
+    import threading
+    threading.Thread(target=_announce_ready, args=(a.port, scheme, not a.no_browser), daemon=True).start()
     uvicorn.run(app, host="0.0.0.0", port=a.port, log_level="warning", **ssl)
+
+
+def log(msg):
+    try:
+        d = DATA_DIR.parent / "logs"
+        d.mkdir(exist_ok=True)
+        import time
+        with open(d / "app.log", "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except Exception:
+        pass
+
+
+def _announce_ready(port, scheme, open_browser):
+    """Wait until the server really answers, then tell the user and open the browser."""
+    import time
+    t0 = time.time()
+    while time.time() - t0 < 180:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+            break
+        except OSError:
+            time.sleep(0.5)
+    else:
+        print("  The server did not start within 3 minutes.")
+        log("server did not become ready")
+        return
+    url = f"{scheme}://127.0.0.1:{port}/"
+    print(f"  READY - open {url}\n")
+    log(f"ready on {url} after {time.time() - t0:.1f}s")
+    if open_browser:
+        import webbrowser
+        webbrowser.open(url)
 
 
 def port_free(port):

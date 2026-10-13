@@ -1,0 +1,26 @@
+name: Diagnose Windows
+on: workflow_dispatch
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python -m PyInstaller --noconfirm --clean FaceAttendance.spec
+      - name: Smoke test exe
+        shell: pwsh
+        run: ./ci/smoke.ps1 -Exe "dist\FaceAttendance\FaceAttendance.exe" -Label exe
+  scripts:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: setup.bat
+        shell: cmd
+        run: setup.bat < nul
+      - name: run.bat smoke test
+        shell: pwsh
+        run: ./ci/smoke.ps1 -Exe "run.bat" -Label scripts
