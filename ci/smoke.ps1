@@ -1,4 +1,4 @@
-param([string]$Exe, [string]$Label, [string]$Port = "8123")
+param([string]$Exe, [string]$Label, [string]$Port = "8123", [string]$Py = "python")
 $ErrorActionPreference = "Continue"
 $notes = @()
 $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "$Exe --port $Port --no-browser" -PassThru -RedirectStandardOutput "$Label-out.txt" -RedirectStandardError "$Label-err.txt" -WorkingDirectory (Get-Location)
@@ -15,7 +15,7 @@ foreach ($pg in @("/","/kiosk","/admin","/static/app.css")) {
 }
 # engine test: post a blank jpeg to the recognizer (loads detection model)
 try {
-  python -c "import cv2,numpy as np; cv2.imwrite('blank.jpg', np.full((480,640,3),120,np.uint8))"
+  & $Py -c "import cv2,numpy as np; cv2.imwrite('blank.jpg', np.full((480,640,3),120,np.uint8))"
   $x = Invoke-WebRequest "http://127.0.0.1:$Port/api/kiosk/frame" -Method Post -InFile blank.jpg -ContentType image/jpeg -UseBasicParsing -TimeoutSec 20
   $notes += "kiosk/frame -> $($x.StatusCode) $($x.Content)"
 } catch { $notes += "kiosk/frame FAILED: $($_.Exception.Message)" }
@@ -27,4 +27,4 @@ if (Test-Path logs\error.log) { $notes += "ERRORLOG: " + (Get-Content logs\error
 Get-CimInstance Win32_Process | Where-Object { $_.Name -like "FaceAttendance*" -or $_.CommandLine -like "*run.py*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 $msg = ($notes -join "`n") -replace "%","%25" -replace "`r","" -replace "`n","%0A"
 Write-Host "::notice title=SMOKE $Label::$msg"
-if (-not $ready) { exit 1 }
+if (-not $ready -or ($notes -match "FAILED")) { exit 1 }

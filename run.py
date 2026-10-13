@@ -78,7 +78,29 @@ def main():
     from app.main import app
     import threading
     threading.Thread(target=_announce_ready, args=(a.port, scheme, not a.no_browser), daemon=True).start()
-    uvicorn.run(app, host="0.0.0.0", port=a.port, log_level="warning", **ssl)
+    config = uvicorn.Config(app, host="0.0.0.0", port=a.port, log_level="warning", **ssl)
+    uvicorn.Server(config).run(sockets=make_sockets(a.port))
+
+
+def make_sockets(port):
+    """Listen on IPv4 AND IPv6, so http://localhost:PORT works even when Windows resolves localhost to ::1."""
+    socks = []
+    s4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if os.name != "nt":
+        s4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s4.bind(("0.0.0.0", port))
+    socks.append(s4)
+    if socket.has_ipv6:
+        try:
+            s6 = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            if os.name != "nt":
+                s6.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            s6.bind(("::", port))
+            socks.append(s6)
+        except OSError:
+            pass          # machine without IPv6: IPv4 alone is fine
+    return socks
 
 
 def log(msg):
