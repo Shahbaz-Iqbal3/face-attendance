@@ -21,6 +21,12 @@ jobs:
       - name: setup.bat
         shell: cmd
         run: setup.bat < nul
+      - name: diagnose.py on Windows
+        shell: pwsh
+        run: |
+          .venv\Scripts\python.exe tools\diagnose.py
+          $m = (Get-Content logs\diagnose.txt -Raw) -replace "%","%25" -replace "`r","" -replace "`n","%0A"
+          Write-Host "::notice title=DIAGNOSE::$m"
       - name: run.bat smoke test
         shell: pwsh
         run: ./ci/smoke.ps1 -Exe "run.bat" -Label scripts -Py ".venv\Scripts\python.exe"

@@ -6,6 +6,11 @@ if not exist .venv\Scripts\python.exe (
   exit /b 1
 )
 .venv\Scripts\python.exe run.py %*
+set EC=%errorlevel%
 echo.
-echo  The app has stopped. If there is an error above, see logs\error.log
+echo  The app has stopped. Exit code: %EC%
+if not "%EC%"=="0" (
+  echo  It did not close normally. Please double-click diagnose.bat, then send these files to support:
+  echo     logs\diagnose.txt   logs\app.log   logs\crash.log
+)
 pause

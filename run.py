@@ -1,5 +1,6 @@
 """Start the server.  python run.py [--port 8000] [--https]"""
 import argparse
+import faulthandler
 import os
 import socket
 import sys
@@ -7,7 +8,11 @@ import traceback
 
 import uvicorn
 
-from app.paths import DATA_DIR
+from app.paths import DATA_DIR, LOG_DIR, applog
+
+# If Python itself crashes (native crash in a DLL), record where into logs/crash.log
+_crash_file = open(LOG_DIR / "crash.log", "w")
+faulthandler.enable(file=_crash_file, all_threads=True)
 
 
 def lan_ip():
@@ -74,8 +79,9 @@ def main():
     print(f"  This computer : {scheme}://127.0.0.1:{a.port}")
     print(f"  Kiosk screen  : {scheme}://127.0.0.1:{a.port}/kiosk")
     print(f"  Admin (LAN)   : {scheme}://{ip}:{a.port}/admin\n")
-    log("starting; loading models...")
+    log(f"starting (python {sys.version.split()[0]}, frozen={getattr(sys, 'frozen', False)}); loading app...")
     from app.main import app
+    log("app loaded; starting web server...")
     import threading
     threading.Thread(target=_announce_ready, args=(a.port, scheme, not a.no_browser), daemon=True).start()
     config = uvicorn.Config(app, host="0.0.0.0", port=a.port, log_level="warning", **ssl)
@@ -104,14 +110,7 @@ def make_sockets(port):
 
 
 def log(msg):
-    try:
-        d = DATA_DIR.parent / "logs"
-        d.mkdir(exist_ok=True)
-        import time
-        with open(d / "app.log", "a", encoding="utf-8") as f:
-            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
-    except Exception:
-        pass
+    applog(msg)
 
 
 def _announce_ready(port, scheme, open_browser):
@@ -153,13 +152,12 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     except BaseException:
-        log = DATA_DIR.parent / "logs"
-        log.mkdir(exist_ok=True)
-        (log / "error.log").write_text(
+        logd = LOG_DIR
+        (logd / "error.log").write_text(
             f"Python {sys.version}\n\n" + traceback.format_exc(), encoding="utf-8")
         print("\n  The app could not start.\n")
         print(traceback.format_exc())
-        print(f"  This was saved to: {log / 'error.log'}")
+        print(f"  This was saved to: {logd / 'error.log'}")
         print("  Please send that file (or a photo of this window) to your support person.\n")
         input("  Press Enter to close...")
         sys.exit(1)

@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
-from .paths import MODELS_DIR
+from .paths import MODELS_DIR, applog
 
 DET_SIZE = 640
 STRIDES = (8, 16, 32)
@@ -44,11 +44,15 @@ class Face:
 
 class FaceEngine:
     def __init__(self):
+        applog(f"engine: onnxruntime {ort.__version__}, numpy {np.__version__}, cv2 {cv2.__version__}")
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = max(1, (os.cpu_count() or 2) // 2)
         prov = ["CPUExecutionProvider"]
+        applog("engine: creating detector session...")
         self.det = ort.InferenceSession(str(MODELS_DIR / "det_500m.onnx"), opts, providers=prov)
+        applog("engine: detector ok; creating recognizer session...")
         self.rec = ort.InferenceSession(str(MODELS_DIR / "w600k_mbf.onnx"), opts, providers=prov)
+        applog("engine: recognizer ok")
         self.det_input = self.det.get_inputs()[0].name
         self.rec_input = self.rec.get_inputs()[0].name
         self._lock = threading.Lock()   # onnx sessions are fine, but keep CPU use predictable

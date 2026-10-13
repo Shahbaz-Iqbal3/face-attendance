@@ -16,3 +16,17 @@ DATA_DIR = DATA_ROOT / "data"
 BACKUP_DIR = DATA_ROOT / "backups"
 DATA_DIR.mkdir(exist_ok=True)
 BACKUP_DIR.mkdir(exist_ok=True)
+
+
+LOG_DIR = DATA_ROOT / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+
+def applog(msg: str):
+    """Append a timestamped line to logs/app.log (never raises)."""
+    try:
+        import time
+        with open(LOG_DIR / "app.log", "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except Exception:
+        pass
