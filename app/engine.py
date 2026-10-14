@@ -1,10 +1,16 @@
-"""Offline face engine: SCRFD detection + MobileFaceNet (ArcFace) embeddings via onnxruntime."""
+"""Offline face engine: SCRFD detection + MobileFaceNet (ArcFace) embeddings.
+
+Runs the models with onnxruntime when it loads safely, otherwise with OpenCV's dnn module (same models,
+same results). onnxruntime is probed in a separate process first, because on some PCs its native
+library crashes Python on import.
+"""
 from __future__ import annotations
 import os
+import subprocess
+import sys
 import threading
 import cv2
 import numpy as np
-import onnxruntime as ort
 
 from .paths import MODELS_DIR, applog
 
@@ -42,19 +48,74 @@ class Face:
         self.quality = {}
 
 
-class FaceEngine:
-    def __init__(self):
-        applog(f"engine: onnxruntime {ort.__version__}, numpy {np.__version__}, cv2 {cv2.__version__}")
+def ort_is_safe() -> bool:
+    """True if 'import onnxruntime' works in a child process (a native crash there cannot hurt us)."""
+    forced = os.environ.get("FA_BACKEND", "").lower()
+    if forced == "opencv":
+        return False
+    if forced == "onnxruntime":
+        return True
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--probe-ort"]
+    else:
+        cmd = [sys.executable, "-c", "import onnxruntime"]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=90, creationflags=flags)
+        ok = r.returncode == 0
+        applog(f"engine: onnxruntime probe exit code {r.returncode} -> {'usable' if ok else 'NOT usable, using OpenCV backend'}")
+        return ok
+    except Exception as ex:
+        applog(f"engine: onnxruntime probe failed ({ex}); using OpenCV backend")
+        return False
+
+
+def _key(a: np.ndarray):
+    a = a.reshape(-1, a.shape[-1])
+    return a.shape
+
+
+class _OrtRunner:
+    name = "onnxruntime"
+
+    def __init__(self, model: str, threads: int):
+        import onnxruntime as ort
         opts = ort.SessionOptions()
-        opts.intra_op_num_threads = max(1, (os.cpu_count() or 2) // 2)
-        prov = ["CPUExecutionProvider"]
-        applog("engine: creating detector session...")
-        self.det = ort.InferenceSession(str(MODELS_DIR / "det_500m.onnx"), opts, providers=prov)
-        applog("engine: detector ok; creating recognizer session...")
-        self.rec = ort.InferenceSession(str(MODELS_DIR / "w600k_mbf.onnx"), opts, providers=prov)
-        applog("engine: recognizer ok")
-        self.det_input = self.det.get_inputs()[0].name
-        self.rec_input = self.rec.get_inputs()[0].name
+        opts.intra_op_num_threads = threads
+        self.s = ort.InferenceSession(str(MODELS_DIR / model), opts, providers=["CPUExecutionProvider"])
+        self.inp = self.s.get_inputs()[0].name
+
+    def run(self, blob):
+        return self.s.run(None, {self.inp: blob})
+
+
+class _CvRunner:
+    name = "opencv"
+
+    def __init__(self, model: str, threads: int):
+        self.net = cv2.dnn.readNetFromONNX(str(MODELS_DIR / model))
+        self.names = self.net.getUnconnectedOutLayersNames()
+
+    def run(self, blob):
+        self.net.setInput(blob)
+        out = self.net.forward(self.names)
+        return list(out) if isinstance(out, (list, tuple)) else [out]
+
+
+class FaceEngine:
+    def __init__(self, backend: str | None = None):
+        threads = max(1, (os.cpu_count() or 2) // 2)
+        backend = backend or ("onnxruntime" if ort_is_safe() else "opencv")
+        applog(f"engine: backend={backend}, numpy {np.__version__}, cv2 {cv2.__version__}")
+        Runner = _OrtRunner if backend == "onnxruntime" else _CvRunner
+        # OpenCV needs the fixed-size (640x640) detector; onnxruntime can use the original
+        det_model = "det_500m.onnx" if backend == "onnxruntime" else "det_500m_static.onnx"
+        applog("engine: loading detector...")
+        self.det = Runner(det_model, threads)
+        applog("engine: loading recognizer...")
+        self.rec = Runner("w600k_mbf.onnx", threads)
+        applog("engine: models ready")
+        self.backend = backend
         self._lock = threading.Lock()   # onnx sessions are fine, but keep CPU use predictable
         self._anchor_cache: dict = {}
 
@@ -77,13 +138,15 @@ class FaceEngine:
         blob = cv2.dnn.blobFromImage(canvas, 1 / 128.0, (DET_SIZE, DET_SIZE),
                                      (127.5, 127.5, 127.5), swapRB=True)
         with self._lock:
-            out = self.det.run(None, {self.det_input: blob})
+            raw = self.det.run(blob)
+        out = {_key(o): o for o in raw}
         scores_l, boxes_l, kps_l = [], [], []
         for idx, stride in enumerate(STRIDES):
-            sc = out[idx].reshape(-1)
-            bb = out[idx + 3].reshape(-1, 4) * stride
-            kp = out[idx + 6].reshape(-1, 10) * stride
             g = DET_SIZE // stride
+            n = g * g * 2
+            sc = out[(n, 1)].reshape(-1)
+            bb = out[(n, 4)].reshape(-1, 4) * stride
+            kp = out[(n, 10)].reshape(-1, 10) * stride
             anc = self._anchors(g, g, stride)
             pos = np.where(sc >= min_score)[0]
             if pos.size == 0:
@@ -115,7 +178,7 @@ class FaceEngine:
         aligned = cv2.warpAffine(bgr, M, (112, 112), borderValue=0.0)
         blob = cv2.dnn.blobFromImage(aligned, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
         with self._lock:
-            e = self.rec.run(None, {self.rec_input: blob})[0][0]
+            e = self.rec.run(blob)[0].reshape(-1)
         e = e.astype(np.float32)
         e /= (np.linalg.norm(e) + 1e-9)
         face.embedding = e

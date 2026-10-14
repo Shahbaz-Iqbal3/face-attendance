@@ -1,3 +1,7 @@
+import sys
+if "--probe-ort" in sys.argv:          # child-process check used by the engine (must stay first)
+    import onnxruntime  # noqa: F401
+    sys.exit(0)
 """Start the server.  python run.py [--port 8000] [--https]"""
 import argparse
 import faulthandler

@@ -12,6 +12,10 @@ jobs:
       - name: Smoke test exe
         shell: pwsh
         run: ./ci/smoke.ps1 -Exe "dist\FaceAttendance\FaceAttendance.exe" -Label exe
+      - name: Smoke test exe (OpenCV backend forced)
+        shell: pwsh
+        env: { FA_BACKEND: opencv }
+        run: ./ci/smoke.ps1 -Exe "dist\FaceAttendance\FaceAttendance.exe" -Label exe-cv -Port 8125
   scripts:
     runs-on: windows-latest
     steps:
@@ -30,3 +34,7 @@ jobs:
       - name: run.bat smoke test
         shell: pwsh
         run: ./ci/smoke.ps1 -Exe "run.bat" -Label scripts -Py ".venv\Scripts\python.exe"
+      - name: run.bat smoke test (OpenCV backend forced)
+        shell: pwsh
+        env: { FA_BACKEND: opencv }
+        run: ./ci/smoke.ps1 -Exe "run.bat" -Label scripts-cv -Port 8124 -Py ".venv\Scripts\python.exe"
