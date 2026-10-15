@@ -1,13 +1,19 @@
-import sys
-if "--probe-ort" in sys.argv:          # child-process check used by the engine (must stay first)
-    import onnxruntime  # noqa: F401
-    sys.exit(0)
-"""Start the server.  python run.py [--port 8000] [--https]"""
+"""Face Attendance launcher.
+
+  run.py                       start the server (opens the browser)
+  run.py --background          start hidden, no browser (used for start-with-Windows)
+  run.py --open admin|kiosk    make sure the server runs, then open that page   [--fullscreen for the kiosk]
+  run.py --stop                stop a running server
+  run.py --get-hq-model        download the optional high-accuracy face model
+  run.py --https               serve over HTTPS (other PCs can then use the camera)
+"""
 import argparse
 import faulthandler
 import os
 import socket
 import sys
+import subprocess
+import time
 import traceback
 
 import uvicorn
@@ -59,6 +65,88 @@ def make_cert():
     return str(cert), str(key)
 
 
+def hide_console():
+    if os.name == "nt":
+        try:
+            import ctypes
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)
+        except Exception:
+            pass
+
+
+def self_cmd(*args):
+    """Command line that starts this same program again (works for source and for the frozen exe)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *args]
+    return [sys.executable, os.path.abspath(__file__), *args]
+
+
+def server_up(port):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
+def wait_ready(port, seconds=180):
+    t0 = time.time()
+    while time.time() - t0 < seconds:
+        if server_up(port):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def start_background(port, https=False):
+    flags = 0
+    if os.name == "nt":
+        flags = 0x00000008 | 0x00000200 | 0x08000000     # DETACHED | NEW_PROCESS_GROUP | NO_WINDOW
+    cmd = self_cmd("--background", "--port", str(port)) + (["--https"] if https else [])
+    subprocess.Popen(cmd, creationflags=flags, close_fds=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def find_kiosk_browser():
+    if os.name != "nt":
+        return None
+    pf = [os.environ.get("ProgramFiles(x86)", ""), os.environ.get("ProgramFiles", ""), os.environ.get("LOCALAPPDATA", "")]
+    for root in pf:
+        for rel in (r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"):
+            p = os.path.join(root, rel)
+            if root and os.path.exists(p):
+                return p
+    return None
+
+
+def open_ui(kind, port, scheme, fullscreen):
+    url = f"{scheme}://127.0.0.1:{port}/{'' if kind == 'home' else kind}"
+    exe = find_kiosk_browser() if (fullscreen and kind == "kiosk") else None
+    if exe:
+        from app.paths import DATA_ROOT
+        profile = str(DATA_ROOT / "kiosk-browser")           # separate profile so fullscreen always applies
+        args = [exe, "--kiosk", url, "--no-first-run", "--use-fake-ui-for-media-stream",
+                f"--user-data-dir={profile}", "--disable-session-crashed-bubble"]
+        if "msedge" in exe.lower():
+            args.append("--edge-kiosk-type=fullscreen")
+        subprocess.Popen(args)
+    else:
+        import webbrowser
+        webbrowser.open(url)
+
+
+def stop_server():
+    if os.name == "nt" and getattr(sys, "frozen", False):
+        name = os.path.basename(sys.executable)
+        subprocess.run(["taskkill", "/F", "/IM", name, "/FI", f"PID ne {os.getpid()}"],
+                       capture_output=True, creationflags=0x08000000)
+        print("  Face Attendance was stopped.")
+    else:
+        print("  Close the Face Attendance window (or press Ctrl+C in it) to stop.")
+
+
 def main():
     if sys.stdout is None:                      # windowed exe: no console attached
         sys.stdout = sys.stderr = open(os.devnull, "w")
@@ -66,14 +154,45 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--no-browser", action="store_true", help="do not open the browser automatically")
     ap.add_argument("--https", action="store_true", help="serve over HTTPS (lets other PCs use the camera)")
+    ap.add_argument("--background", action="store_true", help="run hidden, without a browser or prompts")
+    ap.add_argument("--open", choices=["admin", "kiosk", "home"], help="open that page (starting the server if needed)")
+    ap.add_argument("--fullscreen", action="store_true", help="with --open kiosk: fullscreen browser window")
+    ap.add_argument("--stop", action="store_true", help="stop a running server")
+    ap.add_argument("--get-hq-model", action="store_true", help="download the optional high-accuracy model")
     a = ap.parse_args()
+    scheme = "https" if a.https else "http"
+
+    if a.stop:
+        return stop_server()
+    if a.get_hq_model:
+        from app.hqmodel import download
+        ok = download()
+        input("\n  Press Enter to close...")
+        return sys.exit(0 if ok else 1)
+    if a.open:
+        if not server_up(a.port):
+            log(f"--open {a.open}: server not running, starting it")
+            start_background(a.port, a.https)
+            if not wait_ready(a.port):
+                log("--open: server did not start in time")
+                return
+        return open_ui(a.open, a.port, scheme, a.fullscreen)
+
+    if a.background:
+        hide_console()
     if not port_free(a.port):
-        print(f"\n  Port {a.port} is already in use. Face Attendance may already be running")
-        print(f"  (look for another black window), or another program uses that port.")
-        print(f"  Open http://localhost:{a.port} in your browser, or start with: --port 8001\n")
+        if a.background:
+            log("background start skipped: already running")
+            return
+        if server_up(a.port):
+            print("\n  Face Attendance is already running. Opening it in your browser...\n")
+            if not a.no_browser:
+                open_ui("home", a.port, scheme, False)
+            time.sleep(2)
+            return
+        print(f"\n  Port {a.port} is used by another program. Start with: --port 8001\n")
         input("  Press Enter to close...")
         sys.exit(1)
-    scheme = "https" if a.https else "http"
     ssl = {}
     if a.https:
         ssl["ssl_certfile"], ssl["ssl_keyfile"] = make_cert()
@@ -83,11 +202,11 @@ def main():
     print(f"  This computer : {scheme}://127.0.0.1:{a.port}")
     print(f"  Kiosk screen  : {scheme}://127.0.0.1:{a.port}/kiosk")
     print(f"  Admin (LAN)   : {scheme}://{ip}:{a.port}/admin\n")
-    log(f"starting (python {sys.version.split()[0]}, frozen={getattr(sys, 'frozen', False)}); loading app...")
+    log(f"starting (python {sys.version.split()[0]}, frozen={getattr(sys, 'frozen', False)}, background={a.background}); loading app...")
     from app.main import app
     log("app loaded; starting web server...")
     import threading
-    threading.Thread(target=_announce_ready, args=(a.port, scheme, not a.no_browser), daemon=True).start()
+    threading.Thread(target=_announce_ready, args=(a.port, scheme, not (a.no_browser or a.background)), daemon=True).start()
     config = uvicorn.Config(app, host="0.0.0.0", port=a.port, log_level="warning", **ssl)
     uvicorn.Server(config).run(sockets=make_sockets(a.port))
 
@@ -163,5 +282,6 @@ if __name__ == "__main__":
         print(traceback.format_exc())
         print(f"  This was saved to: {logd / 'error.log'}")
         print("  Please send that file (or a photo of this window) to your support person.\n")
-        input("  Press Enter to close...")
+        if "--background" not in sys.argv:
+            input("  Press Enter to close...")
         sys.exit(1)

@@ -13,16 +13,26 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyinstaller
       - run: python -m PyInstaller --noconfirm --clean FaceAttendance.spec
-      - name: Smoke test the exe
+      - name: Smoke test the portable exe
+        shell: pwsh
+        run: ./ci/smoke.ps1 -Exe "dist\FaceAttendance\FaceAttendance.exe" -Label portable
+      - name: Zip the portable version
+        shell: pwsh
+        run: Compress-Archive -Path dist\FaceAttendance -DestinationPath FaceAttendance-portable.zip
+      - name: Install Inno Setup and build the installer
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist\FaceAttendance\FaceAttendance.exe -ArgumentList "--port 8123","--no-browser" -PassThru
-          Start-Sleep -Seconds 15
-          (Invoke-WebRequest http://localhost:8123/api/status -UseBasicParsing).Content
-          Stop-Process -Id $p.Id -Force
-      - run: Compress-Archive -Path dist\FaceAttendance -DestinationPath FaceAttendance-windows.zip
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=1.0.${{ github.run_number }}" installer\FaceAttendance.iss
+          Get-ChildItem installer-out
+      - name: Test the installer (install, start, stop, uninstall)
         shell: pwsh
+        run: ./ci/test-installer.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: FaceAttendance-windows
-          path: FaceAttendance-windows.zip
+          name: FaceAttendance-Setup
+          path: installer-out/FaceAttendance-Setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FaceAttendance-portable
+          path: FaceAttendance-portable.zip
