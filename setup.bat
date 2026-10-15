@@ -46,7 +46,7 @@ if errorlevel 1 (
 )
 
 echo  Checking the install...
-.venv\Scripts\python.exe -c "import numpy, cv2, onnxruntime, fastapi, uvicorn, openpyxl; print('  All packages load correctly.')"
+.venv\Scripts\python.exe -c "import numpy, cv2, fastapi, uvicorn, openpyxl; cv2.FaceDetectorYN; cv2.FaceRecognizerSF; print('  All packages load correctly.')"
 if errorlevel 1 (
   echo  A package was installed but cannot load. Send a photo of this window to support.
   pause
