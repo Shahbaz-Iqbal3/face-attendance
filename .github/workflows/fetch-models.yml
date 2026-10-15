@@ -1,0 +1,30 @@
+name: Fetch commercial-safe models
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download YuNet + SFace from OpenCV Zoo (MIT / Apache-2.0) and verify checksums
+        run: |
+          git lfs install
+          git clone --depth 1 https://github.com/opencv/opencv_zoo /tmp/zoo
+          cd /tmp/zoo
+          git lfs pull --include="models/face_detection_yunet/*,models/face_recognition_sface/*"
+          cd "$GITHUB_WORKSPACE"
+          cp /tmp/zoo/models/face_detection_yunet/face_detection_yunet_2023mar.onnx models/
+          cp /tmp/zoo/models/face_recognition_sface/face_recognition_sface_2021dec.onnx models/
+          cp /tmp/zoo/models/face_detection_yunet/LICENSE models/LICENSE-yunet-MIT.txt
+          cp /tmp/zoo/models/face_recognition_sface/LICENSE models/LICENSE-sface-Apache-2.0.txt
+          echo "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4  models/face_detection_yunet_2023mar.onnx" | sha256sum -c
+          echo "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79  models/face_recognition_sface_2021dec.onnx" | sha256sum -c
+          ls -la models
+      - name: Commit models
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add models
+          git commit -m "Add YuNet + SFace models (commercial-safe licences)" || echo "nothing to commit"
+          git push
