@@ -38,7 +38,7 @@ def _nms(dets: np.ndarray, thresh: float) -> list[int]:
 
 
 class Face:
-    __slots__ = ("box", "score", "kps", "embedding", "quality")
+    __slots__ = ("box", "score", "kps", "embedding", "quality", "row")
 
     def __init__(self, box, score, kps):
         self.box = box          # x1,y1,x2,y2 (ints)
@@ -46,6 +46,7 @@ class Face:
         self.kps = kps          # 5x2
         self.embedding = None
         self.quality = {}
+        self.row = None         # engine-specific raw detection (used for alignment)
 
 
 def ort_is_safe() -> bool:
@@ -102,7 +103,52 @@ class _CvRunner:
         return list(out) if isinstance(out, (list, tuple)) else [out]
 
 
-class FaceEngine:
+class _FaceMixin:
+    """Checks shared by every engine: image quality and rough head pose."""
+
+    @staticmethod
+    def quality(bgr, face: Face, aligned) -> dict:
+        x1, y1, x2, y2 = face.box
+        crop = bgr[y1:y2, x1:x2]
+        if crop.size == 0:
+            return {"ok": False, "reason": "No face area"}
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, (112, 112))
+        blur = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        bright = float(gray.mean())
+        size = min(x2 - x1, y2 - y1)
+        reason = None
+        if size < 80:
+            reason = "Move closer to the camera"
+        elif bright < 55:
+            reason = "Too dark - add more light"
+        elif bright > 215:
+            reason = "Too bright - reduce glare"
+        elif blur < 25:
+            reason = "Image is blurry - hold still"
+        return {"ok": reason is None, "reason": reason, "blur": round(blur, 1),
+                "brightness": round(bright, 1), "size": int(size)}
+
+    @staticmethod
+    def pose(face: Face) -> dict:
+        """Rough head pose from 5 landmarks: yaw (left/right) and pitch (up/down) ratios."""
+        le, re, nose, ml, mr = face.kps
+        eye_c = (le + re) / 2
+        mouth_c = (ml + mr) / 2
+        eye_dist = np.linalg.norm(re - le) + 1e-6
+        yaw = float((nose[0] - eye_c[0]) / eye_dist)             # + = nose toward image-right
+        face_h = np.linalg.norm(mouth_c - eye_c) + 1e-6
+        pitch = float((nose[1] - eye_c[1]) / face_h)              # larger = chin down
+        return {"yaw": round(yaw, 3), "pitch": round(pitch, 3)}
+
+
+class ArcFaceEngine(_FaceMixin):
+    """InsightFace SCRFD + MobileFaceNet. Optional, NON-COMMERCIAL models: only used if their files are present."""
+    model_id = "arcface"
+    dim = 512
+    default_threshold = 0.45
+    label = "InsightFace ArcFace (research licence)"
+
     def __init__(self, backend: str | None = None):
         threads = max(1, (os.cpu_count() or 2) // 2)
         backend = backend or ("onnxruntime" if ort_is_safe() else "opencv")
@@ -185,40 +231,69 @@ class FaceEngine:
         face.quality = self.quality(bgr, face, aligned)
         return e
 
-    @staticmethod
-    def quality(bgr, face: Face, aligned) -> dict:
-        x1, y1, x2, y2 = face.box
-        crop = bgr[y1:y2, x1:x2]
-        if crop.size == 0:
-            return {"ok": False, "reason": "No face area"}
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (112, 112))
-        blur = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        bright = float(gray.mean())
-        size = min(x2 - x1, y2 - y1)
-        reason = None
-        if size < 80:
-            reason = "Move closer to the camera"
-        elif bright < 55:
-            reason = "Too dark - add more light"
-        elif bright > 215:
-            reason = "Too bright - reduce glare"
-        elif blur < 25:
-            reason = "Image is blurry - hold still"
-        return {"ok": reason is None, "reason": reason, "blur": round(blur, 1),
-                "brightness": round(bright, 1), "size": int(size)}
 
-    @staticmethod
-    def pose(face: Face) -> dict:
-        """Rough head pose from 5 landmarks: yaw (left/right) and pitch (up/down) ratios."""
-        le, re, nose, ml, mr = face.kps
-        eye_c = (le + re) / 2
-        mouth_c = (ml + mr) / 2
-        eye_dist = np.linalg.norm(re - le) + 1e-6
-        yaw = float((nose[0] - eye_c[0]) / eye_dist)             # + = nose toward image-right
-        face_h = np.linalg.norm(mouth_c - eye_c) + 1e-6
-        pitch = float((nose[1] - eye_c[1]) / face_h)              # larger = chin down
-        return {"yaw": round(yaw, 3), "pitch": round(pitch, 3)}
+
+class SFaceEngine(_FaceMixin):
+    """OpenCV Zoo YuNet (MIT) detector + SFace (Apache-2.0) recogniser. Commercial-friendly; needs only OpenCV."""
+    model_id = "sface"
+    dim = 128
+    default_threshold = 0.363          # cosine; value recommended by the SFace authors
+    label = "YuNet + SFace (MIT / Apache-2.0)"
+
+    def __init__(self):
+        applog(f"engine: YuNet+SFace, numpy {np.__version__}, cv2 {cv2.__version__}")
+        self.det = cv2.FaceDetectorYN.create(str(MODELS_DIR / "face_detection_yunet_2023mar.onnx"), "",
+                                             (320, 320), 0.6, 0.3, 5000)
+        self.rec = cv2.FaceRecognizerSF.create(str(MODELS_DIR / "face_recognition_sface_2021dec.onnx"), "")
+        self.backend = "opencv"
+        self._lock = threading.Lock()
+        applog("engine: models ready")
+
+    def detect(self, bgr: np.ndarray, min_score: float = 0.6) -> list[Face]:
+        h0, w0 = bgr.shape[:2]
+        scale = min(1.0, DET_SIZE / max(h0, w0))
+        img = cv2.resize(bgr, (int(w0 * scale), int(h0 * scale))) if scale < 1.0 else bgr
+        h, w = img.shape[:2]
+        with self._lock:
+            self.det.setInputSize((w, h))
+            self.det.setScoreThreshold(max(min_score, 0.6))
+            _, rows = self.det.detect(img)
+        faces = []
+        if rows is None:
+            return faces
+        for r in rows:
+            r = r.astype(np.float32).copy()
+            r[:14] /= scale                      # back to original image coordinates
+            x, y, bw, bh = r[:4]
+            f = Face((int(max(0, x)), int(max(0, y)), int(min(w0, x + bw)), int(min(h0, y + bh))),
+                     r[14], r[4:14].reshape(5, 2).astype(np.float32))
+            f.row = r
+            faces.append(f)
+        faces.sort(key=lambda f: (f.box[2] - f.box[0]) * (f.box[3] - f.box[1]), reverse=True)
+        return faces
+
+    def embed(self, bgr: np.ndarray, face: Face) -> np.ndarray:
+        with self._lock:
+            aligned = self.rec.alignCrop(bgr, face.row)
+            e = self.rec.feature(aligned).reshape(-1).astype(np.float32)
+        e /= (np.linalg.norm(e) + 1e-9)
+        face.embedding = e
+        face.quality = self.quality(bgr, face, aligned)
+        return e
+
+
+def FaceEngine(model: str | None = None):
+    """Pick the engine. Default: YuNet+SFace (commercial-safe). InsightFace only if its files are present."""
+    model = (model or os.environ.get("FA_MODEL", "")).lower()
+    have_sface = (MODELS_DIR / "face_recognition_sface_2021dec.onnx").exists()
+    have_arc = (MODELS_DIR / "w600k_mbf.onnx").exists()
+    if model == "arcface" and have_arc:
+        return ArcFaceEngine()
+    if have_sface:
+        return SFaceEngine()
+    if have_arc:
+        return ArcFaceEngine()
+    raise FileNotFoundError(f"No face models found in {MODELS_DIR}")
 
 
 def decode_image(data: bytes) -> np.ndarray | None:

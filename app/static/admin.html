@@ -96,7 +96,7 @@ function authScreen(s){
 function shell(s){
   $('#app').innerHTML=`<div class="shell"><nav><div class="brand">${esc(s.company)}</div>
    <a href="#/dashboard" data-p="dashboard">Dashboard</a><a href="#/attendance" data-p="attendance">Attendance</a>
-   <a href="#/people" data-p="people">People</a><a href="#/settings" data-p="settings">Settings</a><div class="sp"></div>
+   <a href="#/people" data-p="people">People</a><a href="#/test" data-p="test">Live test</a><a href="#/settings" data-p="settings">Settings</a><div class="sp"></div>
    <a class="lnk" href="/kiosk" target="_blank">Open kiosk</a><a class="lnk" href="#" id="out">Sign out</a></nav><main id="view"></main></div>`;
   $('#out').onclick=async e=>{e.preventDefault();await api('/api/logout',{method:'POST'});boot();};
   route();
@@ -106,7 +106,7 @@ function route(){
   clearTimers();
   const p=(location.hash.replace('#/','')||'dashboard').split('?')[0];
   document.querySelectorAll('nav a[data-p]').forEach(a=>a.classList.toggle('on',a.dataset.p===p));
-  ({dashboard,attendance,people,settings}[p]||dashboard)();
+  ({dashboard,attendance,people,test:liveTest,settings}[p]||dashboard)();
 }
 
 /* ---------- dashboard ---------- */
@@ -189,7 +189,7 @@ async function manualDialog(init,done){
 async function people(){
   const rows=await api('/api/admin/people');
   $('#view').innerHTML=`<div class="top"><div><h1>People</h1><div class="muted">${rows.length} on the list</div></div><button class="btn primary" id="np">Add person</button></div><div class="box" id="pl"></div>`;
-  $('#pl').innerHTML=rows.length?`<table><tr><th></th><th>Name</th><th>Employee ID</th><th>Department</th><th>Face samples</th><th>Status</th><th></th></tr>${rows.map(p=>`<tr><td>${p.has_thumb?`<img class="thumb" src="/api/admin/people/${p.id}/thumb">`:'<div class="thumb"></div>'}</td><td>${esc(p.name)}</td><td>${esc(p.emp_code)}</td><td>${esc(p.department)}</td><td class="num">${p.samples?p.samples:'<span class="chip late">Not enrolled</span>'}</td><td>${p.active?'Active':'<span class="muted">Inactive</span>'}</td><td class="acts"><button class="btn small primary" data-en="${p.id}">${p.samples?'Add faces':'Enrol face'}</button><button class="btn small" data-ed="${p.id}">Edit</button></td></tr>`).join('')}</table>`:'<div class="empty">Nobody here yet. Add a person, then enrol their face.</div>';
+  $('#pl').innerHTML=rows.length?`<table><tr><th></th><th>Name</th><th>Employee ID</th><th>Department</th><th>Face samples</th><th>Status</th><th></th></tr>${rows.map(p=>`<tr><td>${p.has_thumb?`<img class="thumb" src="/api/admin/people/${p.id}/thumb">`:'<div class="thumb"></div>'}</td><td>${esc(p.name)}</td><td>${esc(p.emp_code)}</td><td>${esc(p.department)}</td><td class="num">${p.samples?p.samples:(p.old_samples?'<span class="chip late">Re-enrol needed</span>':'<span class="chip late">Not enrolled</span>')}</td><td>${p.active?'Active':'<span class="muted">Inactive</span>'}</td><td class="acts"><button class="btn small primary" data-en="${p.id}">${p.samples?'Add faces':(p.old_samples?'Re-enrol':'Enrol face')}</button><button class="btn small" data-ed="${p.id}">Edit</button></td></tr>`).join('')}</table>`:'<div class="empty">Nobody here yet. Add a person, then enrol their face.</div>';
   $('#np').onclick=()=>personDialog(null);
   $('#pl').querySelectorAll('[data-en]').forEach(b=>b.onclick=()=>enrollDialog(rows.find(p=>p.id==b.dataset.en)));
   $('#pl').querySelectorAll('[data-ed]').forEach(b=>b.onclick=()=>personDialog(rows.find(p=>p.id==b.dataset.ed)));
@@ -257,6 +257,47 @@ async function enrollDialog(p){
   draw();
 }
 
+
+/* ---------- live recognition test ---------- */
+async function liveTest(){
+  const s=await api('/api/admin/settings');
+  $('#view').innerHTML=`<div class="top"><div><h1>Live recognition test</h1><div class="muted">Stand in front of the camera. Nothing is recorded: this only shows how the system sees each face.</div></div></div>
+   <div class="cols"><div class="box" style="padding:12px"><div class="cam" id="lcam" style="position:relative"><video id="lv" autoplay playsinline muted></video><div id="lbox" style="position:absolute;inset:0"></div></div><div class="err" id="lerr"></div></div>
+   <div><div class="box" style="padding:14px"><h3 style="margin-bottom:8px">What the system sees</h3><div id="lres" class="muted">Waiting for a face...</div></div>
+   <div class="box" style="padding:14px;margin-top:14px"><h3 style="margin-bottom:8px">Strictness: <span id="lthv" class="num">${esc(s.threshold)}</span></h3><input type="range" min="0.20" max="0.80" step="0.01" id="lthr" value="${esc(s.threshold)}">
+   <div class="hint">The line on each bar is this value. A registered person should score <b>above</b> the line, a stranger well <b>below</b>. Raise it if strangers get accepted; lower it if staff are missed. Changes are saved when you let go.</div></div></div></div>`;
+  const vid=$('#lv');let stream=null,run=true,busy=false;
+  const cleanup=()=>{run=false;if(stream)stream.getTracks().forEach(t=>t.stop());};
+  addEventListener('hashchange',cleanup,{once:true});
+  try{
+    if(!navigator.mediaDevices?.getUserMedia)throw new Error('The browser blocks the camera on this address. Open this page on the server computer (localhost) or start the server with --https.');
+    stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720}},audio:false});vid.srcObject=stream;await vid.play();
+  }catch(e){$('#lerr').textContent=e.message;return;}
+  let thr=+s.threshold;
+  const cv=document.createElement('canvas');
+  const render=r=>{
+    thr=r.threshold;$('#lthv').textContent=thr.toFixed(2);
+    $('#lbox').innerHTML=r.faces.map(f=>{const [x1,y1,x2,y2]=f.box;const ok=f.accepted;
+      return `<div style="position:absolute;left:${(1-x2)*100}%;top:${y1*100}%;width:${(x2-x1)*100}%;height:${(y2-y1)*100}%;border:3px solid ${ok?'var(--ok)':'var(--bad)'};border-radius:8px"></div>`}).join('');
+    $('#lres').innerHTML=r.faces.length?r.faces.map((f,i)=>{
+      const rows=f.candidates.length?f.candidates.map((c,j)=>{const pct=Math.max(0,Math.min(1,c.score))*100;const good=c.score>=thr;
+        return `<div style="margin:6px 0"><div style="display:flex;justify-content:space-between"><span>${esc(c.name)}</span><b class="num">${c.score.toFixed(2)}</b></div>
+        <div style="position:relative;height:10px;background:var(--line);border-radius:6px"><div style="height:100%;width:${pct}%;background:${good?'var(--ok)':'var(--muted)'};border-radius:6px"></div><div style="position:absolute;top:-3px;bottom:-3px;left:${thr*100}%;width:2px;background:var(--ink)"></div></div></div>`}).join(''):'<div class="muted">Nobody is enrolled with this face model yet.</div>';
+      return `<div style="margin-bottom:12px"><b>Face ${i+1}</b> ${f.accepted?`<span class="chip on_time">would be accepted</span>`:`<span class="chip absent">would NOT be accepted</span>`}${f.quality?`<div class="hint" style="color:var(--late)">${esc(f.quality)}</div>`:''}${rows}</div>`}).join('')
+      :'<div class="muted">No face found. Look at the camera.</div>';
+  };
+  const loop=async()=>{
+    if(!run||!$('#lv'))return;
+    if(!busy&&vid.videoWidth){busy=true;
+      const w=Math.min(640,vid.videoWidth);cv.width=w;cv.height=Math.round(w*vid.videoHeight/vid.videoWidth);cv.getContext('2d').drawImage(vid,0,0,cv.width,cv.height);
+      try{const blob=await new Promise(r=>cv.toBlob(r,'image/jpeg',.8));render(await api('/api/admin/test-frame',{method:'POST',body:blob}));}catch(e){}
+      busy=false;}
+    setTimeout(loop,500);};
+  loop();
+  $('#lthr').oninput=e=>{$('#lthv').textContent=(+e.target.value).toFixed(2)};
+  $('#lthr').onchange=async e=>{try{await api('/api/admin/settings',{method:'PUT',json:{threshold:+e.target.value}});toast('Strictness saved');}catch(x){toast(x.message)}};
+}
+
 /* ---------- settings ---------- */
 async function settings(){
   const s=await api('/api/admin/settings'),lan=await (await fetch('/api/lan')).json(),bk=await api('/api/admin/backups');
@@ -268,7 +309,7 @@ async function settings(){
    <div class="grid2"><div class="field"><label>Same-person cooldown (seconds)</label><input type="number" min="5" id="s_cooldown_sec" value="${esc(s.cooldown_sec)}"><div class="hint">Stops repeat scans while someone stands at the kiosk.</div></div>
    <div class="field"><label>Check-out gap (minutes)</label><input type="number" min="1" id="s_checkout_gap_min" value="${esc(s.checkout_gap_min)}"><div class="hint">A scan this long after check-in counts as check-out.</div></div></div>
    <h2 style="margin:22px 0 12px">Recognition</h2>
-   <div class="field"><label>Matching strictness: <span id="thv" class="num">${esc(s.threshold)}</span></label><input type="range" min="0.30" max="0.70" step="0.01" id="s_threshold" value="${esc(s.threshold)}"><div class="hint">Higher is stricter: fewer wrong matches, but more people may need a second try. Default 0.45.</div></div>
+   <div class="field"><label>Matching strictness: <span id="thv" class="num">${esc(s.threshold)}</span></label><input type="range" min="0.20" max="0.80" step="0.01" id="s_threshold" value="${esc(s.threshold)}"><div class="hint">Higher is stricter: fewer wrong matches, but more people may need a second try. Recommended for this face model: ${esc(s.threshold_default)}. <a href="#" id="thr_reset">Reset</a> &middot; Not sure? Use <a href="#/test">Live test</a> with real staff to pick a value. <br>Face model: ${esc(s.model)}</div></div>
    <div class="grid2"><div class="field"><label>Smallest face to accept (pixels)</label><input type="number" min="40" id="s_min_face_px" value="${esc(s.min_face_px)}"><div class="hint">Ignores people walking past far from the camera.</div></div>
    <div class="field"><label>Frames to confirm a match</label><input type="number" min="1" max="5" id="s_confirm_frames" value="${esc(s.confirm_frames)}"></div></div>
    <div class="err" id="serr"></div><button class="btn primary" id="ssv">Save settings</button></div>
@@ -278,6 +319,7 @@ async function settings(){
   <div class="sect form"><h2 style="margin-bottom:12px">Admin password</h2><div class="field"><label>New password</label><input type="password" id="npw" autocomplete="new-password"></div><button class="btn" id="cpw">Change password</button></div>
   <div class="sect form"><h2 style="margin-bottom:8px">Network</h2><p class="muted">Other computers on the same Wi-Fi can open the admin panel at<br><b>${lan.scheme}://${lan.ip}:${lan.port}/admin</b></p></div>`;
   $('#s_threshold').oninput=e=>$('#thv').textContent=e.target.value;
+  $('#thr_reset').onclick=e=>{e.preventDefault();$('#s_threshold').value=s.threshold_default;$('#thv').textContent=s.threshold_default;};
   $('#ssv').onclick=async()=>{
     const num=['late_after_min','cooldown_sec','checkout_gap_min','min_face_px','confirm_frames'];
     const body={company_name:$('#s_company_name').value,office_start:$('#s_office_start').value,threshold:+$('#s_threshold').value};

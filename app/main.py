@@ -153,6 +153,9 @@ class SettingsIn(BaseModel):
 def get_settings():
     s = db.get_settings()
     s.pop("admin_hash", None)
+    s["threshold"] = str(service.threshold(rec.engine))
+    s["threshold_default"] = str(rec.engine.default_threshold)
+    s["model"] = rec.engine.label
     return s
 
 
@@ -165,9 +168,9 @@ def put_settings(body: SettingsIn):
         except ValueError:
             raise HTTPException(400, "Office start must look like 09:00")
     if "threshold" in data and not (0.2 <= data["threshold"] <= 0.9):
-        raise HTTPException(400, "Matching threshold must be between 0.20 and 0.90")
+        raise HTTPException(400, "Matching strictness must be between 0.20 and 0.90")
     for k, v in data.items():
-        db.set_setting(k, str(v))
+        db.set_setting(f"threshold_{rec.engine.model_id}" if k == "threshold" else k, str(v))
     return get_settings()
 
 
@@ -182,8 +185,10 @@ class PersonIn(BaseModel):
 @app.get("/api/admin/people", dependencies=[Depends(require_admin)])
 def people():
     rows = db.conn().execute("""SELECT p.id, p.emp_code, p.name, p.department, p.active, p.created_at,
-        (SELECT COUNT(*) FROM embeddings e WHERE e.person_id=p.id) AS samples,
-        (p.thumb IS NOT NULL) AS has_thumb FROM people p ORDER BY p.name""").fetchall()
+        (SELECT COUNT(*) FROM embeddings e WHERE e.person_id=p.id AND e.model=?) AS samples,
+        (SELECT COUNT(*) FROM embeddings e WHERE e.person_id=p.id AND e.model<>?) AS old_samples,
+        (p.thumb IS NOT NULL) AS has_thumb FROM people p ORDER BY p.name""",
+        (rec.engine.model_id, rec.engine.model_id)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -285,14 +290,14 @@ def _enroll(pid: int, data: bytes, step: str, force: bool):
                     return {"ok": False, "reason": STEP_HINT[step], "pose": pose}
     # does this face already belong to someone else?
     other, sim = rec.gallery.best_match(f.embedding, exclude=pid)
-    thr = float(db.get_settings()["threshold"])
+    thr = service.threshold(rec.engine)
     if other is not None and sim >= thr and not force:
         nm = rec.gallery.people[other]["name"]
         return {"ok": False, "duplicate": True, "reason": f"This face looks like {nm} (already enrolled)",
                 "similarity": round(sim, 2)}
     with db.tx() as cx:
-        cx.execute("INSERT INTO embeddings(person_id, vector, label) VALUES(?,?,?)",
-                   (pid, f.embedding.astype(np.float32).tobytes(), step))
+        cx.execute("INSERT INTO embeddings(person_id, vector, label, model) VALUES(?,?,?,?)",
+                   (pid, f.embedding.astype(np.float32).tobytes(), step, rec.engine.model_id))
         if person["thumb"] is None:
             x1, y1, x2, y2 = f.box
             pad = int(0.25 * (x2 - x1))
@@ -302,10 +307,18 @@ def _enroll(pid: int, data: bytes, step: str, force: bool):
             cx.execute("UPDATE people SET thumb=? WHERE id=?", (cv2.imencode(".jpg", crop)[1].tobytes(), pid))
     if step == "front":
         FRONT_POSE[pid] = pose
-    n = c.execute("SELECT COUNT(*) FROM embeddings WHERE person_id=?", (pid,)).fetchone()[0]
+    n = c.execute("SELECT COUNT(*) FROM embeddings WHERE person_id=? AND model=?", (pid, rec.engine.model_id)).fetchone()[0]
     rec.gallery.reload()
     rec._log("enroll", pid, person["name"], f"sample {n} ({step})", None)
     return {"ok": True, "samples": n, "box": list(f.box), "quality": q}
+
+
+@app.post("/api/admin/test-frame", dependencies=[Depends(require_admin)])
+async def test_frame(request: Request):
+    img = decode_image(await request.body())
+    if img is None:
+        raise HTTPException(400, "Bad image")
+    return await run_blocking(rec.analyze, img)
 
 
 # ---------------- admin: attendance ----------------

@@ -1,6 +1,5 @@
 numpy
 opencv-python-headless
-onnxruntime
 fastapi
 uvicorn
 openpyxl

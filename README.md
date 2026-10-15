@@ -56,8 +56,14 @@ Tell staff the system stores biometric data and get their consent.
 - Overnight shifts (check-in before midnight, out after) are not handled.
 - Backup restore is manual: stop the app and replace `data/attendance.db` with a backup file.
 
-## Tech
-Python, FastAPI, SQLite, onnxruntime. SCRFD (det_500m) for detection and MobileFaceNet/ArcFace (w600k_mbf) for
-512-d embeddings, from the InsightFace "buffalo_sc" pack. **Licence warning:** InsightFace's pretrained models are
-for non-commercial research use. Before selling this product, swap in commercially licensed models (for example
-OpenCV Zoo YuNet + SFace, which are MIT/Apache-2.0) or get a licence from InsightFace.
+## Tech and licences
+Python, FastAPI, SQLite, OpenCV. Face detection: **YuNet** (MIT licence). Face recognition: **SFace** (Apache-2.0).
+Both come from the OpenCV Zoo and are included in `models/` together with their licence texts, so the app can be
+sold commercially. No `onnxruntime` or other native AI runtime is needed.
+The code can also use InsightFace models (non-commercial research licence) if you place `w600k_mbf.onnx` and
+`det_500m.onnx` in `models/` and start with `FA_MODEL=arcface`. They are not shipped and must not be used in a product you sell.
+
+## Tuning with real people
+Admin > **Live test** shows, live, how the system scores each face against enrolled people and where the accept line is.
+Enrol 3 to 5 staff, test in the real office light, and move the strictness slider until staff score above the line and
+strangers well below it. Face data is per model: after upgrading from an older version, people show **Re-enrol needed**.

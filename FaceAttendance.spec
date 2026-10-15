@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [("models", "models"), ("app/static", "app/static")]
 binaries, hidden = [], collect_submodules("app")
-for pkg in ("onnxruntime", "cv2", "uvicorn", "cryptography"):
+for pkg in ("cv2", "uvicorn", "cryptography"):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hidden += h
 hidden += ["uvicorn.logging", "uvicorn.loops.auto", "uvicorn.protocols.http.auto",

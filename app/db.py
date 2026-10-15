@@ -18,7 +18,6 @@ DEFAULT_SETTINGS = {
     "late_after_min": "15",
     "cooldown_sec": "60",
     "checkout_gap_min": "120",
-    "threshold": "0.45",       # cosine similarity needed to accept a match (higher = stricter)
     "min_face_px": "90",       # ignore faces smaller than this on the kiosk (people walking past)
     "confirm_frames": "2",     # consecutive matches needed before marking
 }
@@ -38,7 +37,8 @@ CREATE TABLE IF NOT EXISTS embeddings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
     vector BLOB NOT NULL,
-    label TEXT NOT NULL DEFAULT ''
+    label TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT 'arcface'
 );
 CREATE INDEX IF NOT EXISTS idx_emb_person ON embeddings(person_id);
 CREATE TABLE IF NOT EXISTS attendance (
@@ -91,6 +91,9 @@ def tx():
 def init():
     with tx() as c:
         c.executescript(SCHEMA)
+        cols = [r["name"] for r in c.execute("PRAGMA table_info(embeddings)")]
+        if "model" not in cols:      # database made by an older version: those were InsightFace embeddings
+            c.execute("ALTER TABLE embeddings ADD COLUMN model TEXT NOT NULL DEFAULT 'arcface'")
         for k, v in DEFAULT_SETTINGS.items():
             c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k, v))
 

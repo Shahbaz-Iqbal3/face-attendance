@@ -12,6 +12,13 @@ from . import db
 from .engine import FaceEngine, Face
 
 FMT = "%Y-%m-%d %H:%M:%S"
+ACTIVE_MODEL = "sface"          # set by Recognizer; selects which face data counts as "enrolled"
+
+
+def threshold(engine) -> float:
+    """Match strictness for the active face model (each model has its own sensible default)."""
+    s = db.get_settings()
+    return float(s.get(f"threshold_{engine.model_id}", engine.default_threshold))
 
 
 def now() -> datetime:
@@ -26,9 +33,10 @@ def parse_hhmm(s: str) -> tuple[int, int]:
 class Gallery:
     """All enrolled embeddings kept in memory as one matrix for fast matching."""
 
-    def __init__(self):
+    def __init__(self, model_id: str, dim: int):
+        self.model_id, self.dim = model_id, dim
         self.lock = threading.Lock()
-        self.matrix = np.zeros((0, 512), np.float32)
+        self.matrix = np.zeros((0, dim), np.float32)
         self.owner = np.zeros((0,), np.int64)
         self.people: dict[int, dict] = {}
         self.reload()
@@ -37,7 +45,7 @@ class Gallery:
         c = db.conn()
         people = {r["id"]: dict(r) for r in c.execute(
             "SELECT id, emp_code, name, department, active FROM people")}
-        rows = c.execute("SELECT person_id, vector FROM embeddings").fetchall()
+        rows = c.execute("SELECT person_id, vector FROM embeddings WHERE model=?", (self.model_id,)).fetchall()
         vecs, owners = [], []
         for r in rows:
             p = people.get(r["person_id"])
@@ -46,8 +54,21 @@ class Gallery:
                 owners.append(r["person_id"])
         with self.lock:
             self.people = people
-            self.matrix = np.vstack(vecs) if vecs else np.zeros((0, 512), np.float32)
+            self.matrix = np.vstack(vecs) if vecs else np.zeros((0, self.dim), np.float32)
             self.owner = np.array(owners, np.int64)
+
+    def ranking(self, emb: np.ndarray, top: int = 3):
+        """[(person_id, score)] best first. Score = mean of a person's top-2 sample similarities."""
+        with self.lock:
+            if self.matrix.shape[0] == 0:
+                return []
+            sims = self.matrix @ emb
+            out = []
+            for pid in np.unique(self.owner):
+                v = np.sort(sims[self.owner == pid])[::-1]
+                out.append((int(pid), float(v[:2].mean()) if v.size > 1 else float(v[0])))
+        out.sort(key=lambda t: t[1], reverse=True)
+        return out[:top]
 
     def best_match(self, emb: np.ndarray, exclude: int | None = None):
         """Return (person_id, similarity) of best person, or (None, best_sim)."""
@@ -71,8 +92,10 @@ class Gallery:
 
 class Recognizer:
     def __init__(self):
+        global ACTIVE_MODEL
         self.engine = FaceEngine()
-        self.gallery = Gallery()
+        ACTIVE_MODEL = self.engine.model_id
+        self.gallery = Gallery(self.engine.model_id, self.engine.dim)
         self._pending: dict[int, tuple[int, float]] = {}   # pid -> (hits, last_ts)
         self._last_event: dict[int, float] = {}            # pid -> monotonic time of last logged event
         self._last_unknown = 0.0
@@ -80,7 +103,7 @@ class Recognizer:
     # ---- kiosk ----
     def process_frame(self, bgr: np.ndarray) -> dict:
         s = db.get_settings()
-        thr = float(s["threshold"])
+        thr = threshold(self.engine)
         min_px = int(s["min_face_px"])
         confirm = max(1, int(s["confirm_frames"]))
         cooldown = int(s["cooldown_sec"])
@@ -119,6 +142,21 @@ class Recognizer:
                     self._log("unknown", None, "Unknown person", "", sim)
             out.append(item)
         return {"faces": out, "ts": now().strftime(FMT)}
+
+    def analyze(self, bgr: np.ndarray) -> dict:
+        """Read-only recognition used by the admin 'Live test': shows scores, never marks attendance."""
+        thr = threshold(self.engine)
+        h, w = bgr.shape[:2]
+        out = []
+        for f in self.engine.detect(bgr)[:3]:
+            self.engine.embed(bgr, f)
+            ranks = self.gallery.ranking(f.embedding)
+            out.append({
+                "box": [f.box[0] / w, f.box[1] / h, f.box[2] / w, f.box[3] / h],
+                "size": f.quality.get("size"), "quality": f.quality.get("reason"),
+                "candidates": [{"name": self.gallery.people[p]["name"], "score": round(sc, 3)} for p, sc in ranks],
+                "accepted": bool(ranks and ranks[0][1] >= thr)})
+        return {"faces": out, "threshold": thr, "model": self.engine.label}
 
     def _mark(self, pid: int, sim: float, cooldown: int) -> dict:
         s = db.get_settings()
@@ -172,11 +210,11 @@ def today_summary() -> dict:
     day = now().strftime("%Y-%m-%d")
     c = db.conn()
     total = c.execute("SELECT COUNT(*) FROM people WHERE active=1 AND EXISTS "
-                      "(SELECT 1 FROM embeddings e WHERE e.person_id=people.id)").fetchone()[0]
+                      "(SELECT 1 FROM embeddings e WHERE e.person_id=people.id AND e.model=?)", (ACTIVE_MODEL,)).fetchone()[0]
     rows = c.execute("""SELECT p.id, p.emp_code, p.name, p.department, a.check_in, a.check_out, a.status, a.source
                         FROM people p LEFT JOIN attendance a ON a.person_id=p.id AND a.day=?
-                        WHERE p.active=1 AND EXISTS (SELECT 1 FROM embeddings e WHERE e.person_id=p.id)
-                        ORDER BY (a.check_in IS NULL), a.check_in""", (day,)).fetchall()
+                        WHERE p.active=1 AND EXISTS (SELECT 1 FROM embeddings e WHERE e.person_id=p.id AND e.model=?)
+                        ORDER BY (a.check_in IS NULL), a.check_in""", (day, ACTIVE_MODEL)).fetchall()
     items = [dict(r) for r in rows]
     present = sum(1 for r in items if r["check_in"])
     late = sum(1 for r in items if r["status"] == "late")
