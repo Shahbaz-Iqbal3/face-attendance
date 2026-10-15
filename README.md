@@ -3,7 +3,21 @@
 Face-recognition attendance for small offices. One computer runs the server and the kiosk camera;
 the owner or HR opens the admin panel from any PC on the same Wi-Fi. **No internet, no cloud.**
 
-## For non-technical users: the .exe
+## Installing for a customer (recommended)
+Download **FaceAttendance-Setup.exe** (GitHub > Actions > newest *Build Windows app* run > Artifacts) and run it.
+It installs the app, adds Start Menu shortcuts (Admin panel, Kiosk screen full-screen, Stop, Data folder), optionally starts
+the server hidden whenever Windows starts, and opens the firewall for the office network. All data (database, backups, logs)
+is kept in `C:\ProgramData\FaceAttendance` and is **kept when the app is uninstalled**.
+On the camera PC tick *Also open the kiosk screen full-screen at login*; on the owner's PC use the Admin shortcut.
+No black window is shown. To stop the server use Start Menu > Face Attendance > Stop Face Attendance.
+
+## Better accuracy (optional, non-commercial)
+Start Menu > Face Attendance > *Get high-accuracy face model* (or `get_hq_model.bat`), restart, then enrol people again.
+This uses InsightFace ArcFace-R50, which is free for testing and in-house use only; selling a product that includes it
+needs a licence from InsightFace. The model is downloaded by the customer and is never part of the installer or repo.
+Delete `models\w600k_r50.onnx` (in the data folder) to go back to the standard model.
+
+## Portable version (no installer)
 Give them the `FaceAttendance` folder (built by `build_exe.bat`, or downloaded from GitHub Actions, see below).
 They double-click **FaceAttendance.exe**: no Python, no setup, no internet. Keep the black window open while in use.
 Data is saved in the `data` folder next to the exe. If Windows Firewall asks, click **Allow** (needed for other PCs to open the admin panel).
