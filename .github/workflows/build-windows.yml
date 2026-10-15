@@ -13,9 +13,16 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyinstaller
       - run: python -m PyInstaller --noconfirm --clean FaceAttendance.spec
-      - name: Smoke test the portable exe
+      - name: Smoke test the portable exe (on a copy, so dist stays clean)
         shell: pwsh
-        run: ./ci/smoke.ps1 -Exe "dist\FaceAttendance\FaceAttendance.exe" -Label portable
+        run: |
+          Copy-Item dist\FaceAttendance smoke-copy -Recurse
+          ./ci/smoke.ps1 -Exe "smoke-copy\FaceAttendance.exe" -Label portable
+          Remove-Item smoke-copy -Recurse -Force
+      - name: Verify dist contains no test data
+        shell: pwsh
+        run: |
+          foreach ($d in "data","logs","backups","models") { if (Test-Path "dist\FaceAttendance\$d") { Write-Error "dist\FaceAttendance\$d should not exist"; exit 1 } }
       - name: Zip the portable version
         shell: pwsh
         run: Compress-Archive -Path dist\FaceAttendance -DestinationPath FaceAttendance-portable.zip
